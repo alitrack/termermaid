@@ -10,3 +10,16 @@ categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
 unicode-width = "0.2"
+pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
+
+[lib]
+name = "termermaid"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "termermaid"
+path = "src/main.rs"
+
+[features]
+default = []
+python = ["pyo3"]
