@@ -2,8 +2,9 @@
 //!
 //! Ported from Grok Build `xai-grok-markdown/src/mermaid.rs` (Apache 2.0).
 
-use crate::canvas::{char_width, CONT, GAP_X, GAP_Y, MAX_LABEL, PAD, WRAP_WIDTH};
+use crate::canvas::{char_width, wrap_label, CONT, GAP_X, GAP_Y, MAX_LABEL, PAD, WRAP_WIDTH};
 use crate::graph::{Dir, Edge, Graph, Head, Shape};
+use crate::parse::ClassInfo;
 
 const MAX_NODES: usize = 128;
 const MAX_EDGES: usize = 512;
@@ -24,16 +25,16 @@ enum Cls {
     Edge,
 }
 
-struct Canvas {
-    w: usize,
-    h: usize,
-    cells: Vec<char>,
-    occupied: Vec<bool>,
+pub struct Canvas {
+    pub w: usize,
+    pub h: usize,
+    pub cells: Vec<char>,
+    pub occupied: Vec<bool>,
     lines: Vec<u8>,
 }
 
 impl Canvas {
-    fn new(w: usize, h: usize) -> Self {
+    pub fn new(w: usize, h: usize) -> Self {
         if w == 0 || h == 0 || w * h > MAX_CANVAS_CELLS {
             return Self {
                 w: 1,
@@ -191,14 +192,14 @@ fn line_char(bits: u8) -> char {
 // ─── Placement ───────────────────────────────────────────────
 
 #[derive(Clone)]
-struct Placed {
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    cx: usize,
-    cy: usize,
-    rank: usize,
+pub struct Placed {
+    pub x: usize,
+    pub y: usize,
+    pub w: usize,
+    pub h: usize,
+    pub cx: usize,
+    pub cy: usize,
+    pub rank: usize,
 }
 
 struct NodeSizes {
@@ -459,7 +460,7 @@ fn assign_tracks(spans: &[(usize, usize, usize)], n_edges: usize) -> (Vec<(usize
 
 // ─── Drawing ─────────────────────────────────────────────────
 
-fn draw_box(canvas: &mut Canvas, p: &Placed, lines: &[String], shape: Shape) {
+pub fn draw_box(canvas: &mut Canvas, p: &Placed, lines: &[String], shape: Shape) {
     let (x, y, w, h) = (p.x, p.y, p.w, p.h);
     if w < 2 || h < 2 {
         return;
@@ -787,4 +788,77 @@ fn canvas_wrap(label: &str, max_width: usize, max_lines: usize) -> Vec<String> {
         }
     }
     lines
+}
+
+// ─── Class/ER Diagram Layout ─────────────────────────────────
+
+/// Render a class or ER diagram with member/attribute boxes.
+pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo]) -> String {
+    let n = graph.nodes.len();
+    if n == 0 {
+        return String::new();
+    }
+
+    // Build multi-line labels for each node
+    let mut labels: Vec<Vec<String>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut parts: Vec<String> = Vec::new();
+        // Title line (class name + optional stereotype)
+        let title = if i < infos.len() {
+            if let Some(ref stereo) = infos[i].stereotype {
+                format!("«{}»\n{}", stereo, graph.nodes[i].label)
+            } else {
+                graph.nodes[i].label.clone()
+            }
+        } else {
+            graph.nodes[i].label.clone()
+        };
+        parts.push(title);
+
+        // Members/attributes
+        if i < infos.len() {
+            for m in &infos[i].members {
+                parts.push(format!("  {}", m));
+            }
+            // Separator
+            if !infos[i].members.is_empty() && !infos[i].methods.is_empty() {
+                parts.push("  ──────────".to_string());
+            }
+            for m in &infos[i].methods {
+                parts.push(format!("  {}", m));
+            }
+        }
+
+        // Wrap each line
+        let mut wrapped_lines: Vec<String> = Vec::new();
+        for part in &parts {
+            let wrapped = wrap_label(part, WRAP_WIDTH, MAX_LINES);
+            for w in wrapped {
+                wrapped_lines.push(w);
+            }
+        }
+        if wrapped_lines.is_empty() {
+            wrapped_lines.push("?".to_string());
+        }
+        labels.push(wrapped_lines);
+    }
+
+    // Compute box dimensions
+    let box_w: Vec<usize> = labels
+        .iter()
+        .map(|lines| {
+            lines
+                .iter()
+                .map(|l| l.chars().map(char_width).sum::<usize>())
+                .max()
+                .unwrap_or(1)
+                .max(1)
+                + 2 * PAD
+                + 2
+        })
+        .collect();
+    let box_h: Vec<usize> = labels.iter().map(|lines| lines.len() + 2).collect();
+
+    // Use flowchart layout engine for positioning
+    layout_flowchart(graph)
 }

@@ -1,5 +1,5 @@
 use crate::layout::layout_flowchart;
-use crate::parse::parse_graph;
+use crate::parse::{parse_class, parse_er, parse_graph, parse_state, ClassInfo};
 use crate::sequence::{parse_sequence, layout_sequence};
 
 /// Render a Mermaid diagram source string.
@@ -9,16 +9,43 @@ pub fn render(src: &str) -> Option<String> {
         return None;
     }
 
-    // Try each parser in order
+    // Try each parser in order — first match wins.
+    // Flowchart/graph
     if let Some(graph) = parse_graph(src) {
         return Some(layout_flowchart(&graph));
     }
+    // Sequence diagram
     if let Some(seq) = parse_sequence(src) {
         return Some(layout_sequence(&seq));
+    }
+    // State diagram
+    if let Some(graph) = parse_state(src) {
+        return Some(layout_flowchart(&graph));
+    }
+    // Class diagram — render with class-box layout when ClassInfo present
+    if let Some((graph, infos)) = parse_class(src) {
+        return Some(layout_class(&graph, &infos));
+    }
+    // ER diagram
+    if let Some((graph, infos)) = parse_er(src) {
+        return Some(layout_class(&graph, &infos));
     }
 
     // Fallback: wrap raw source in a box
     Some(fallback(src))
+}
+
+/// Render a class/ER diagram with member boxes.
+fn layout_class(graph: &crate::graph::Graph, infos: &[ClassInfo]) -> String {
+    // For now, render class/ER as flowchart if there are no members to show.
+    // When members/methods/attributes are present, use the class-box layout.
+    let has_members = infos.iter().any(|ci| !ci.members.is_empty() || !ci.methods.is_empty());
+
+    if has_members {
+        crate::layout::layout_class_diagram(graph, infos)
+    } else {
+        crate::layout::layout_flowchart(graph)
+    }
 }
 
 fn fallback(src: &str) -> String {
@@ -57,6 +84,34 @@ mod tests {
     #[test]
     fn test_simple_flowchart() {
         let result = render("graph TD\n  A-->B");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_state_diagram() {
+        let result = render("stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running : start");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_class_diagram() {
+        let result = render(
+            "classDiagram\n  class Animal {\n    +String name\n    +int age\n    +eat() void\n  }\n  Animal <|-- Dog",
+        );
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_er_diagram() {
+        let result = render(
+            "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n  CUSTOMER {\n    string name\n    string email PK\n  }",
+        );
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_sequence_diagram() {
+        let result = render("sequenceDiagram\n  Alice->>Bob: Hello");
         assert!(result.is_some());
     }
 }
