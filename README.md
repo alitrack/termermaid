@@ -13,7 +13,7 @@ Ported from [xai-org/grok-build](https://github.com/xai-org/grok-build) (Apache 
 | `stateDiagram-v2` | states, transitions, composite states |
 | `classDiagram` | UML-style boxes (name / members / methods sections), relations |
 | `erDiagram` | entity boxes with attributes, cardinality relations |
-| `pie` | horizontal bar chart with percentages |
+| `pie` | circular filled pie with sector legend |
 
 ## Install
 
@@ -133,10 +133,21 @@ echo 'pie title Pets
 Output:
 ```
 Pets
-════════════════════
-  Dogs ████████████████ 386 (79%)
-  Cats ███ 85 (17%)
-  Rats █ 15 (3%)
+════
+          ·          
+    ··▓▓▓▒█████··    
+  ··▓▓▓▓▓▒███████··  
+ ·▓▓▓▓▓▓▓▓█████████· 
+ ·█▓▓▓▓▓▓▓█████████· 
+·███████████████████·
+ ·█████████████████· 
+ ·█████████████████· 
+  ··█████████████··  
+    ··█████████··    
+          ·          
+  █ Dogs — 79.4%
+  ▓ Cats — 17.5%
+  ▒ Rats — 3.1%
 ```
 
 ## Library
