@@ -4,6 +4,10 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   build-wheels:
     name: Build wheel (${{ matrix.os }})
@@ -44,5 +48,3 @@ jobs:
 
       - name: Publish
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_TOKEN }}
