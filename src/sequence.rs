@@ -39,9 +39,14 @@ enum SeqItem {
         anchor: NoteAnchor,
         text: String,
     },
-    Divider {
-        text: String,
+    BlockStart {
+        kind: String,
+        label: String,
     },
+    BlockElse {
+        label: String,
+    },
+    BlockEnd,
 }
 
 pub struct Sequence {
@@ -181,22 +186,27 @@ pub fn parse_sequence(src: &str) -> Option<Sequence> {
                     text: text_part,
                 });
             }
-            "loop" | "alt" | "opt" | "par" | "critical" | "break" | "else" | "and" | "option" => {
-                if matches!(
-                    first.to_ascii_lowercase().as_str(),
-                    "else" | "and" | "option"
-                ) {
-                    if blocks.last() != Some(&true) {
-                        continue;
-                    }
-                } else {
-                    blocks.push(true);
+            "loop" | "alt" | "opt" | "par" | "critical" | "break" => {
+                blocks.push(true);
+                if seq.items.len() >= MAX_EDGES {
+                    return None;
+                }
+                let rest = st[first.len()..].trim();
+                seq.items.push(SeqItem::BlockStart {
+                    kind: first.to_ascii_lowercase(),
+                    label: decode_html_entities(rest),
+                });
+            }
+            "else" | "and" | "option" => {
+                if blocks.last() != Some(&true) {
+                    continue;
                 }
                 if seq.items.len() >= MAX_EDGES {
                     return None;
                 }
-                seq.items.push(SeqItem::Divider {
-                    text: decode_html_entities(st),
+                let rest = st[first.len()..].trim();
+                seq.items.push(SeqItem::BlockElse {
+                    label: decode_html_entities(rest),
                 });
             }
             "rect" | "box" => blocks.push(false),
@@ -205,9 +215,7 @@ pub fn parse_sequence(src: &str) -> Option<Sequence> {
                     if seq.items.len() >= MAX_EDGES {
                         return None;
                     }
-                    seq.items.push(SeqItem::Divider {
-                        text: "end".to_string(),
-                    });
+                    seq.items.push(SeqItem::BlockEnd);
                 }
             }
             _ => {
@@ -453,7 +461,7 @@ pub fn layout_sequence(seq: &Sequence, ascii_only: bool, color_mode: crate::them
                     _ => {}
                 }
             }
-            SeqItem::Divider { .. } => {}
+            SeqItem::BlockStart { .. } | SeqItem::BlockElse { .. } | SeqItem::BlockEnd => {}
         }
     }
     reqs.sort_by_key(|&(l, r, _)| r - l);
@@ -480,10 +488,11 @@ pub fn layout_sequence(seq: &Sequence, ascii_only: bool, color_mode: crate::them
                 let (x, w) = note_geometry(&xs, anchor, text.chars().count());
                 canvas_w = canvas_w.max(x + w + 1);
             }
-            SeqItem::Divider { text } => {
-                canvas_w = canvas_w.max(text.chars().count() + 4);
+            SeqItem::BlockStart { label, .. } | SeqItem::BlockElse { label } => {
+                canvas_w = canvas_w.max(label.chars().count() + 8);
             }
-            _ => {}
+            SeqItem::BlockEnd => {}
+            SeqItem::Message { .. } => {}
         }
     }
 
@@ -496,7 +505,9 @@ pub fn layout_sequence(seq: &Sequence, ascii_only: bool, color_mode: crate::them
                 if from == to { 4 } else if text.is_some() { 3 } else { 2 }
             }
             SeqItem::Note { .. } => 4,
-            SeqItem::Divider { .. } => 2,
+            SeqItem::BlockStart { .. } => 2,
+            SeqItem::BlockElse { .. } => 2,
+            SeqItem::BlockEnd => 2,
         };
     }
     let bottom_top = y;
@@ -537,9 +548,111 @@ pub fn layout_sequence(seq: &Sequence, ascii_only: bool, color_mode: crate::them
         }
     }
 
-    // Draw items
+    // Draw items — track block nesting for vertical borders
+    let mut block_stack: Vec<(usize, String)> = Vec::new();
     for (item, &r) in seq.items.iter().zip(&rows) {
         match item {
+            SeqItem::BlockStart { kind, label } => {
+                // Draw horizontal top border
+                let line_char = if ascii_only { '-' } else { '─' };
+                let v_bar = if ascii_only { '|' } else { '│' };
+                let text = if label.is_empty() {
+                    kind.clone()
+                } else {
+                    format!("{} {}", kind, label)
+                };
+                let left = xs[0].saturating_sub(box_w[0] / 2);
+                let right = xs[n - 1] + box_w[n - 1].div_ceil(2);
+                for x in (left + 1)..right {
+                    if r < canvas.h && x < canvas.w {
+                        canvas.cells[r * canvas.w + x] = line_char;
+                    }
+                }
+                // Preserve vertical borders at edges for nested blocks
+                if r < canvas.h {
+                    if left < canvas.w { canvas.cells[r * canvas.w + left] = v_bar; }
+                    if right < canvas.w { canvas.cells[r * canvas.w + right] = v_bar; }
+                }
+                if r < canvas.h {
+                    let tx = left + 2;
+                    for (j, c) in text.chars().enumerate() {
+                        if tx + j < canvas.w {
+                            canvas.cells[r * canvas.w + tx + j] = c;
+                        }
+                    }
+                }
+                block_stack.push((r, label.clone()));
+            }
+            SeqItem::BlockElse { label } => {
+                // Draw else separator line — preserve vertical borders at edges
+                let line_char = if ascii_only { '-' } else { '─' };
+                let v_bar = if ascii_only { '|' } else { '│' };
+                let text = if label.is_empty() {
+                    "else".to_string()
+                } else {
+                    format!("else {}", label)
+                };
+                let left = xs[0].saturating_sub(box_w[0] / 2);
+                let right = xs[n - 1] + box_w[n - 1].div_ceil(2);
+                for x in (left + 1)..right {
+                    if r < canvas.h && x < canvas.w {
+                        canvas.cells[r * canvas.w + x] = line_char;
+                    }
+                }
+                // Restore vertical borders at edges
+                if r < canvas.h {
+                    if left < canvas.w { canvas.cells[r * canvas.w + left] = v_bar; }
+                    if right < canvas.w { canvas.cells[r * canvas.w + right] = v_bar; }
+                }
+                if r < canvas.h {
+                    let tx = left + 2;
+                    for (j, c) in text.chars().enumerate() {
+                        if tx + j < canvas.w {
+                            canvas.cells[r * canvas.w + tx + j] = c;
+                        }
+                    }
+                }
+            }
+            SeqItem::BlockEnd => {
+                // Draw bottom border + vertical sides
+                let line_char = if ascii_only { '-' } else { '─' };
+                let v_bar = if ascii_only { '|' } else { '│' };
+                let left = xs[0].saturating_sub(box_w[0] / 2);
+                let right = xs[n - 1] + box_w[n - 1].div_ceil(2);
+                // Bottom horizontal border (preserve vertical at edges)
+                for x in (left + 1)..right {
+                    if r < canvas.h && x < canvas.w {
+                        canvas.cells[r * canvas.w + x] = line_char;
+                    }
+                }
+                if r < canvas.h {
+                    if left < canvas.w { canvas.cells[r * canvas.w + left] = v_bar; }
+                    if right < canvas.w { canvas.cells[r * canvas.w + right] = v_bar; }
+                }
+                // Vertical side borders from start row to end row
+                if let Some((start_row, _)) = block_stack.pop() {
+                    for row in (start_row + 1)..r {
+                        if row < canvas.h {
+                            if left < canvas.w {
+                                if canvas.cells[row * canvas.w + left] == ' '
+                                    || canvas.cells[row * canvas.w + left] == '│'
+                                    || canvas.cells[row * canvas.w + left] == '|'
+                                {
+                                    canvas.cells[row * canvas.w + left] = v_bar;
+                                }
+                            }
+                            if right < canvas.w {
+                                if canvas.cells[row * canvas.w + right] == ' '
+                                    || canvas.cells[row * canvas.w + right] == '│'
+                                    || canvas.cells[row * canvas.w + right] == '|'
+                                {
+                                    canvas.cells[row * canvas.w + right] = v_bar;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             SeqItem::Message { from, to, text, dashed, head } => {
                 let l = *from.min(to);
                 let ri = *from.max(to);
@@ -631,25 +744,6 @@ pub fn layout_sequence(seq: &Sequence, ascii_only: bool, color_mode: crate::them
                     for (j, c) in text.chars().enumerate() {
                         if tx + j < canvas.w {
                             canvas.cells[(ny + 1) * canvas.w + tx + j] = c;
-                        }
-                    }
-                }
-            }
-            SeqItem::Divider { text } => {
-                let dw = text.chars().count() + 4;
-                let dx = 0usize;
-                let div_char = if ascii_only { '-' } else { '─' };
-                for col in 0..dw {
-                    if r < canvas.h && dx + col < canvas.w {
-                        canvas.cells[r * canvas.w + dx + col] = div_char;
-                    }
-                }
-                // Text on the divider line
-                let tx = dx + 2;
-                if r < canvas.h {
-                    for (j, c) in text.chars().enumerate() {
-                        if tx + j < canvas.w {
-                            canvas.cells[r * canvas.w + tx + j] = c;
                         }
                     }
                 }
