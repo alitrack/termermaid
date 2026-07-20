@@ -6,13 +6,14 @@ Ported from [xai-org/grok-build](https://github.com/xai-org/grok-build) (Apache 
 
 ## Supported diagram types
 
-| Type | Support |
-|------|---------|
-| `flowchart` / `graph` | TD, LR, RL, BT; subgraphs; edge styles |
-| `sequenceDiagram` | participants, messages, notes, autonumber, dividers |
+| Type | Features |
+|------|----------|
+| `flowchart` / `graph` | TD, LR, RL, BT; subgraphs; edge styles (`-->`, `---`, `-.->`, `==>`) |
+| `sequenceDiagram` | participants, messages, notes, autonumber, **loop/alt/opt blocks** |
 | `stateDiagram-v2` | states, transitions, composite states |
-| `classDiagram` | UML-style class boxes with members/methods, relations |
+| `classDiagram` | UML-style boxes (name / members / methods sections), relations |
 | `erDiagram` | entity boxes with attributes, cardinality relations |
+| `pie` | horizontal bar chart with percentages |
 
 ## Install
 
@@ -20,22 +21,98 @@ Ported from [xai-org/grok-build](https://github.com/xai-org/grok-build) (Apache 
 cargo install termermaid
 ```
 
+Python (CI builds coming):
+
+```bash
+pip install termermaid
+```
+
 ## Usage
 
 ```bash
 # From stdin
-echo "graph TD; A-->B; B-->C" | termermaid
+echo 'graph TD; A-->B; B-->C' | termermaid
 
-# From file
-termermaid diagram.mmd
+# Options
+echo 'graph TD; A-->B' | termermaid --ascii          # ASCII mode
+echo 'graph TD; A-->B' | termermaid --json            # JSON output
+echo 'graph TD; A-->B' | termermaid --color always --theme neon   # Colored
+```
 
-# Flowchart
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--ascii`, `-a` | Use `+`, `-`, `\|` instead of Unicode box-drawing |
+| `--json`, `-j` | Output JSON with width/height/text metadata |
+| `--color <mode>` | `auto` (default, respects `NO_COLOR`), `always`, `never` |
+| `--theme <name>` | `default`, `terra`, `neon`, `mono`, `amber`, `phosphor` |
+
+### Color themes
+
+```
+echo 'graph TD; A-->B' | termermaid --color always --theme neon
+echo 'graph TD; A-->B' | termermaid --color always --theme phosphor
+```
+
+6 themes: **default** (terminal colors) | **terra** (earthy) | **neon** (bright) | **mono** (high-contrast) | **amber** (classic CRT) | **phosphor** (green CRT)
+
+### Examples
+
+**Flowchart**
+```bash
 echo 'graph TD
   A[Start] --> B{Decision?}
   B -->|Yes| C[Do thing]
-  B -->|No| D[Skip]' | termermaid
+  B -->|No| D[Skip]
+  C --> E((End))
+  D --> E' | termermaid
+```
 
-# Class diagram
+**Sequence with blocks**
+```bash
+echo 'sequenceDiagram
+  Alice->>Bob: Hello
+  loop Every minute
+    Alice->>Bob: Ping
+    Bob-->>Alice: Pong
+  end
+  alt Success
+    Bob->>Alice: OK
+  else Failure
+    Bob->>Alice: Error
+  end' | termermaid
+```
+
+Output:
+```
+┌───────┐  ┌─────┐
+│ Alice │  │ Bob │
+└───────┘  └─────┘
+    │  Hello  │
+    ──────────▶
+    │         │
+│─loop Every minute─│
+│   │  Ping   │   │
+│   ──────────▶   │
+│   │  Pong   │   │
+│   ◀┄┄┄┄┄┄┄┄┄┄   │
+│──────────────────│
+│─alt Success──────│
+│   │   OK    │   │
+│   ◀──────────   │
+│─else Failure─────│
+│   │  Error  │   │
+│   ◀──────────   │
+│──────────────────│
+    │         │
+┌───────┐  ┌─────┐
+│ Alice │  │ Bob │
+└───────┘  └─────┘
+```
+
+**Class diagram**
+```bash
 echo 'classDiagram
   class Animal {
     +String name
@@ -43,52 +120,57 @@ echo 'classDiagram
     +eat() void
   }
   Animal <|-- Dog' | termermaid
-
-# Sequence diagram
-echo 'sequenceDiagram
-  Alice->>Bob: Hello
-  Bob-->>Alice: Hi there!' | termermaid
 ```
 
-Output examples:
-
-```
-╭       ╮              ╭               ╮
-│ Start │──────▶│ Decision? │
-╰       ╯              ╰       △       ╯
-                               │
-                    ┌──────────┼──────────┐
-                    │          │          │
-                    ▼          │          ▼
-              ╭─────────╮     │    ╭──────╮
-              │ Do thing │     │    │ Skip │
-              ╰─────────╯     │    ╰──────╯
-                               │
+**Pie chart**
+```bash
+echo 'pie title Pets
+  "Dogs" : 386
+  "Cats" : 85
+  "Rats" : 15' | termermaid
 ```
 
+Output:
 ```
-╭               ╮
-     Animal
-├               ┤
-  +String name
-    +int age
-├               ┤
-   +eat() void
-╰       △       ╯
-        │
-╭───────╮
-   Dog
-╰───────╯
+Pets
+════════════════════
+  Dogs ████████████████ 386 (79%)
+  Cats ███ 85 (17%)
+  Rats █ 15 (3%)
 ```
 
 ## Library
 
 ```rust
-use termermaid::render;
+use termermaid::mermaid::{render_with_opts, RenderOptions};
+use termermaid::theme::{ColorMode, Theme, ThemeType};
 
-let output = render("graph TD; A-->B").unwrap();
+let opts = RenderOptions {
+    ascii_only: false,
+    format_json: false,
+    color_mode: ColorMode::Ansi256,
+    theme: Theme::get(ThemeType::Neon),
+};
+let output = render_with_opts("graph TD; A-->B", opts).unwrap();
 println!("{}", output);
 ```
+
+## Python
+
+```python
+import termermaid
+print(termermaid.render('graph TD; A-->B'))
+```
+
+Build wheel: `maturin build --release --features python`
+
+## Changelog
+
+- **v0.5.0** — Sequence block rendering (loop/alt/opt/par boxes with vertical borders)
+- **v0.4.0** — ANSI color themes (6 themes, `--color` / `--theme` flags)
+- **v0.3.0** — Pie chart support
+- **v0.2.0** — ASCII mode (`--ascii`), JSON output (`--json`), `RenderOptions` API
+- **v0.1.0** — Initial release: flowchart, sequence, state, class, ER diagrams
 
 ## License
 
