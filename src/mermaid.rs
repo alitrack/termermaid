@@ -24,25 +24,23 @@ pub fn render(src: &str) -> Option<String> {
     }
     // Class diagram — render with class-box layout when ClassInfo present
     if let Some((graph, infos)) = parse_class(src) {
-        return Some(layout_class(&graph, &infos));
+        return Some(layout_class(&graph, &infos, false));
     }
     // ER diagram
     if let Some((graph, infos)) = parse_er(src) {
-        return Some(layout_class(&graph, &infos));
+        return Some(layout_class(&graph, &infos, true));
     }
 
     // Fallback: wrap raw source in a box
     Some(fallback(src))
 }
-
-/// Render a class/ER diagram with member boxes.
-fn layout_class(graph: &crate::graph::Graph, infos: &[ClassInfo]) -> String {
-    // For now, render class/ER as flowchart if there are no members to show.
-    // When members/methods/attributes are present, use the class-box layout.
-    let has_members = infos.iter().any(|ci| !ci.members.is_empty() || !ci.methods.is_empty());
+fn layout_class(graph: &crate::graph::Graph, infos: &[ClassInfo], is_er: bool) -> String {
+    let has_members = infos
+        .iter()
+        .any(|ci| !ci.members.is_empty() || !ci.methods.is_empty());
 
     if has_members {
-        crate::layout::layout_class_diagram(graph, infos)
+        crate::layout::layout_class_diagram(graph, infos, is_er)
     } else {
         crate::layout::layout_flowchart(graph)
     }
@@ -95,9 +93,13 @@ mod tests {
 
     #[test]
     fn test_class_diagram() {
-        let result = render(
-            "classDiagram\n  class Animal {\n    +String name\n    +int age\n    +eat() void\n  }\n  Animal <|-- Dog",
-        );
+        let src = "classDiagram\n  class Animal {\n    +String name\n    +int age\n    +eat() void\n  }\n  Animal <|-- Dog";
+        // Verify parser returns members
+        if let Some((g, infos)) = crate::parse::parse_class(src) {
+            let has = infos.iter().any(|ci| !ci.members.is_empty() || !ci.methods.is_empty());
+            assert!(has, "ClassInfo should have members: {:?}", infos.first().map(|c| (&c.members, &c.methods)));
+        }
+        let result = render(src);
         assert!(result.is_some());
     }
 

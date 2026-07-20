@@ -168,9 +168,34 @@ pub fn parse_class(src: &str) -> Option<(Graph, Vec<ClassInfo>)> {
         dir: Dir::Down,
     };
     let mut infos: Vec<ClassInfo> = Vec::new();
+    let mut merged = String::new();
+    let mut in_class = false;
 
     for st in &statements[1..] {
         if st.is_empty() {
+            continue;
+        }
+        // Accumulate multi-line class definitions
+        if in_class {
+            merged.push('\n');
+            merged.push_str(st);
+            if st.contains('}') {
+                in_class = false;
+                if let Some(ci) = parse_class_def(&merged) {
+                    if let Some(idx) = graph.node_label(&ci.name, &ci.name) {
+                        while infos.len() <= idx {
+                            infos.push(ClassInfo::default());
+                        }
+                        infos[idx] = ci;
+                    }
+                }
+                merged.clear();
+            }
+            continue;
+        }
+        if st.contains('{') && !st.contains('}') {
+            merged = st.clone();
+            in_class = true;
             continue;
         }
         if let Some(ci) = parse_class_def(st) {
@@ -236,22 +261,32 @@ pub fn parse_er(src: &str) -> Option<(Graph, Vec<ClassInfo>)> {
         dir: Dir::Down,
     };
     let mut infos: Vec<ClassInfo> = Vec::new();
+    let mut merged = String::new();
+    let mut in_entity = false;
 
     for st in &statements[1..] {
         if st.is_empty() {
             continue;
         }
-        if st.contains('{') {
-            if let Some(ci) = parse_er_entity(st) {
-                if let Some(idx) = graph.node_label(&ci.name, &ci.name) {
-                    while infos.len() <= idx {
-                        infos.push(ClassInfo::default());
+        // Accumulate multi-line entity definitions
+        if in_entity {
+            merged.push('\n');
+            merged.push_str(st);
+            if st.contains('}') {
+                in_entity = false;
+                if let Some(ci) = parse_er_entity(&merged) {
+                    if let Some(idx) = graph.node_label(&ci.name, &ci.name) {
+                        while infos.len() <= idx {
+                            infos.push(ClassInfo::default());
+                        }
+                        infos[idx] = ci;
                     }
-                    infos[idx] = ci;
                 }
+                merged.clear();
             }
             continue;
         }
+        // Try relation first (handles ||--o{ cardinality containing {)
         if let Some((from, to, card_from, card_to, line)) = parse_er_relation(st) {
             let fi = graph.node_label(&from, &from)?;
             let ti = graph.node_label(&to, &to)?;
@@ -265,6 +300,23 @@ pub fn parse_er(src: &str) -> Option<(Graph, Vec<ClassInfo>)> {
                     head_to: Head::None,
                     line,
                 });
+            }
+            continue;
+        }
+        // Entity definition (possibly multi-line)
+        if st.contains('{') && !st.contains('}') {
+            merged = st.clone();
+            in_entity = true;
+            continue;
+        }
+        if st.contains('{') {
+            if let Some(ci) = parse_er_entity(st) {
+                if let Some(idx) = graph.node_label(&ci.name, &ci.name) {
+                    while infos.len() <= idx {
+                        infos.push(ClassInfo::default());
+                    }
+                    infos[idx] = ci;
+                }
             }
             continue;
         }

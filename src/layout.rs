@@ -793,62 +793,91 @@ fn canvas_wrap(label: &str, max_width: usize, max_lines: usize) -> Vec<String> {
 // ─── Class/ER Diagram Layout ─────────────────────────────────
 
 /// Render a class or ER diagram with member/attribute boxes.
-pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo]) -> String {
+pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool) -> String {
     let n = graph.nodes.len();
     if n == 0 {
         return String::new();
     }
 
-    // Build multi-line labels for each node
-    let mut labels: Vec<Vec<String>> = Vec::with_capacity(n);
+    // Build sections per node: [name_section, members_section, methods_section]
+    let mut node_sections: Vec<Vec<Vec<String>>> = Vec::with_capacity(n);
+    let mut max_w = 1usize;
+
     for i in 0..n {
-        let mut parts: Vec<String> = Vec::new();
-        // Title line (class name + optional stereotype)
-        let title = if i < infos.len() {
+        let mut sections: Vec<Vec<String>> = Vec::new();
+
+        // Name section
+        let name = graph.nodes[i].label.clone();
+        let name_section = if i < infos.len() {
             if let Some(ref stereo) = infos[i].stereotype {
-                format!("«{}»\n{}", stereo, graph.nodes[i].label)
+                vec![format!("«{}»", stereo), name]
             } else {
-                graph.nodes[i].label.clone()
+                vec![name]
             }
         } else {
-            graph.nodes[i].label.clone()
+            vec![name]
         };
-        parts.push(title);
+        sections.push(name_section);
 
-        // Members/attributes
-        if i < infos.len() {
-            for m in &infos[i].members {
-                parts.push(format!("  {}", m));
-            }
-            // Separator
-            if !infos[i].members.is_empty() && !infos[i].methods.is_empty() {
-                parts.push("  ──────────".to_string());
-            }
-            for m in &infos[i].methods {
-                parts.push(format!("  {}", m));
-            }
+        // Members/attributes section
+        if i < infos.len() && !infos[i].members.is_empty() {
+            let members: Vec<String> = infos[i].members.iter().map(|m| m.clone()).collect();
+            sections.push(members);
         }
 
-        // Wrap each line
-        let mut wrapped_lines: Vec<String> = Vec::new();
-        for part in &parts {
-            let wrapped = wrap_label(part, WRAP_WIDTH, MAX_LINES);
-            for w in wrapped {
-                wrapped_lines.push(w);
+        // Methods section
+        if i < infos.len() && !infos[i].methods.is_empty() {
+            let methods: Vec<String> = infos[i].methods.iter().map(|m| m.clone()).collect();
+            sections.push(methods);
+        }
+
+        // Compute width from longest line across all sections
+        for sec in &sections {
+            for line in sec {
+                let lw = line.chars().map(char_width).sum::<usize>();
+                max_w = max_w.max(lw);
             }
         }
-        if wrapped_lines.is_empty() {
-            wrapped_lines.push("?".to_string());
-        }
-        labels.push(wrapped_lines);
+
+        node_sections.push(sections);
     }
 
-    // Compute box dimensions
-    let box_w: Vec<usize> = labels
+    // Wrap sections to fit width
+    let inner = WRAP_WIDTH.saturating_sub(2 * PAD + 2).max(1);
+    for sections in node_sections.iter_mut() {
+        for sec in sections.iter_mut() {
+            let mut wrapped: Vec<String> = Vec::new();
+            for line in sec.drain(..) {
+                let ws = wrap_label(&line, inner, MAX_LINES);
+                wrapped.extend(ws);
+            }
+            *sec = wrapped;
+        }
+    }
+
+    if graph.nodes.is_empty() {
+        return String::new();
+    }
+
+    let ranks = compute_ranks(graph);
+    let max_rank = *ranks.iter().max().unwrap_or(&0);
+
+    let mut by_rank: Vec<Vec<usize>> = vec![Vec::new(); max_rank + 1];
+    for (i, &r) in ranks.iter().enumerate() {
+        by_rank[r].push(i);
+    }
+    for row in &mut by_rank {
+        row.sort_by_key(|&i| &graph.nodes[i].label);
+    }
+    order_ranks(&mut by_rank, &graph.edges, &ranks);
+
+    // Size boxes from actual sections, not just name labels
+    let box_w: Vec<usize> = node_sections
         .iter()
-        .map(|lines| {
-            lines
+        .map(|sections| {
+            sections
                 .iter()
+                .flat_map(|s| s.iter())
                 .map(|l| l.chars().map(char_width).sum::<usize>())
                 .max()
                 .unwrap_or(1)
@@ -857,8 +886,215 @@ pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo]) -> String {
                 + 2
         })
         .collect();
-    let box_h: Vec<usize> = labels.iter().map(|lines| lines.len() + 2).collect();
+    let box_h: Vec<usize> = node_sections
+        .iter()
+        .map(|sections| {
+            let lines: usize = sections.iter().map(|s| s.len()).sum();
+            let seps = sections.len().saturating_sub(1);
+            lines + seps + 2 // +2 for top/bottom border
+        })
+        .collect();
 
-    // Use flowchart layout engine for positioning
-    layout_flowchart(graph)
+    let gap = GAP_X;
+    let mut centers = vec![0usize; box_w.len()];
+    let mut x = 0usize;
+    let gap_y = GAP_Y;
+    let mut y_per_rank = vec![0usize; max_rank + 1];
+    let mut cur_y = 0usize;
+    for rank in 0..=max_rank {
+        y_per_rank[rank] = cur_y;
+        let max_h = by_rank
+            .get(rank)
+            .map_or(3, |row| row.iter().map(|&i| box_h[i]).max().unwrap_or(3));
+        cur_y += max_h + gap_y;
+    }
+    let canvas_h = cur_y + 1;
+
+    // Place nodes per rank
+    for (rank, row) in by_rank.iter().enumerate() {
+        let mut pos_x = 0usize;
+        for &idx in row {
+            centers[idx] = pos_x + box_w[idx] / 2;
+            pos_x += box_w[idx] + gap;
+        }
+        let total_w: usize = row.iter().map(|&i| box_w[i]).sum::<usize>()
+            + (row.len().saturating_sub(1)) * gap;
+        let offset = if total_w > 0 { 0usize } else { 0 };
+        let mut cur = offset;
+        for &idx in row {
+            centers[idx] = cur + box_w[idx] / 2;
+            cur += box_w[idx] + gap;
+        }
+    }
+    let canvas_w = by_rank
+        .iter()
+        .flat_map(|row| row.iter())
+        .map(|&i| centers[i] + box_w[i] / 2 + 1)
+        .max()
+        .unwrap_or(40)
+        .max(40);
+
+    // Build placed array
+    let mut placed: Vec<Placed> = Vec::with_capacity(n);
+    for i in 0..n {
+        let rank = ranks[i];
+        placed.push(Placed {
+            x: centers[i].saturating_sub(box_w[i] / 2),
+            y: y_per_rank[rank],
+            w: box_w[i],
+            h: box_h[i],
+            cx: centers[i],
+            cy: y_per_rank[rank] + box_h[i] / 2,
+            rank,
+        });
+    }
+
+    if canvas_w.saturating_mul(canvas_h) > MAX_CANVAS_CELLS {
+        return layout_flowchart(graph);
+    }
+
+    let mut canvas = Canvas::new(canvas_w, canvas_h);
+
+    // Draw class boxes
+    for i in 0..n {
+        let shape = &graph.nodes[i].shape;
+        draw_class_box(&mut canvas, &placed[i], &node_sections[i], *shape);
+    }
+
+    // Edge routing — spans are (edge_index, from_rank, to_rank)
+    let mut spans: Vec<(usize, usize, usize)> = Vec::new();
+    for (ei, e) in graph.edges.iter().enumerate() {
+        if e.from < n && e.to < n && ranks[e.from] < ranks[e.to] {
+            spans.push((ei, ranks[e.from], ranks[e.to]));
+        }
+    }
+    let (assigned, _max_bus) = assign_tracks(&spans, graph.edges.len());
+    let mut edge_bus = vec![0usize; graph.edges.len()];
+    for (idx, slot) in assigned {
+        edge_bus[idx] = slot;
+    }
+
+    for (ei, e) in graph.edges.iter().enumerate() {
+        if e.from < n && e.to < n {
+            let rf = ranks[e.from];
+            let rt = ranks[e.to];
+            if rf < rt {
+                route_forward(&mut canvas, &placed[e.from], &placed[e.to], e, edge_bus[ei]);
+            }
+        }
+    }
+
+    canvas_to_string(&canvas)
 }
+
+fn canvas_to_string(canvas: &Canvas) -> String {
+    let mut out = String::new();
+    let mut last_nonempty = 0;
+    for row in (0..canvas.h).rev() {
+        let start = row * canvas.w;
+        let end = start + canvas.w;
+        if canvas.cells[start..end].iter().any(|&c| c != ' ') {
+            last_nonempty = row;
+            break;
+        }
+    }
+    for row in 0..=last_nonempty {
+        let start = row * canvas.w;
+        let end = start + canvas.w;
+        let line: String = canvas.cells[start..end].iter().collect();
+        let trimmed = line.trim_end().to_string();
+        if !trimmed.is_empty() || row <= last_nonempty {
+            out.push_str(&trimmed);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Draw a UML-style class box with section separators (├──┤).
+pub fn draw_class_box(
+    canvas: &mut Canvas,
+    p: &Placed,
+    sections: &[Vec<String>],
+    shape: Shape,
+) {
+    let (x, y, w, h) = (p.x, p.y, p.w, p.h);
+    if w < 2 || h < 2 {
+        return;
+    }
+    let right = x + w - 1;
+    let bottom = y + h - 1;
+
+    // Border corners
+    let (tl, tr, bl, br, hz, vt) = match shape {
+        Shape::Round | Shape::Diamond => ('╭', '╮', '╰', '╯', '─', '│'),
+        Shape::Rect => ('┌', '┐', '└', '┘', '─', '│'),
+    };
+    canvas.set(x, y, tl, Cls::Border);
+    canvas.set(right, y, tr, Cls::Border);
+    canvas.set(x, bottom, bl, Cls::Border);
+    canvas.set(right, bottom, br, Cls::Border);
+
+    // Top and bottom edges
+    for cx in (x + 1)..right {
+        canvas.add_bits(cx, y, L | R);
+        canvas.add_bits(cx, bottom, L | R);
+    }
+
+    // Row tracker
+    let mut row = y + 1;
+
+    for (si, section) in sections.iter().enumerate() {
+        if section.is_empty() {
+            continue;
+        }
+        // Section separator (except before first section)
+        if si > 0 {
+            if row <= bottom {
+                canvas.set(x, row, '├', Cls::Border);
+                for cx in (x + 1)..right {
+                    canvas.add_bits(cx, row, L | R);
+                }
+                canvas.set(right, row, '┤', Cls::Border);
+            }
+            row += 1;
+        }
+        // Content lines
+        let inner = w.saturating_sub(2 * PAD + 2).max(1);
+        for line in section {
+            if row > bottom {
+                break;
+            }
+            let text = crate::canvas::fit_label(line, inner);
+            let tw: usize = text.chars().map(char_width).sum();
+            let text_x = x + 1 + PAD + inner.saturating_sub(tw) / 2;
+            let mut cur = text_x;
+            for c in text.chars() {
+                let cw = char_width(c).max(1);
+                canvas.set(cur, row, c, Cls::Text);
+                for k in 1..cw {
+                    canvas.set(cur + k, row, CONT, Cls::Text);
+                }
+                cur += cw;
+            }
+            row += 1;
+        }
+    }
+
+    // Side edges for all rows
+    for cy in (y + 1)..bottom {
+        canvas.add_bits(x, cy, U | D);
+        canvas.add_bits(right, cy, U | D);
+    }
+
+    // Mark all cells as occupied
+    for cy in y..=bottom {
+        for cx in x..=right {
+            let i = canvas.idx(cx, cy);
+            canvas.occupied[i] = true;
+        }
+    }
+}
+
+// Re-export for sequence.rs
+pub use crate::canvas::fit_label;
