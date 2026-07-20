@@ -18,11 +18,30 @@ const D: u8 = 2;
 const L: u8 = 4;
 const R: u8 = 8;
 
+// Cell classification for colorized output
+const CLS_NONE: u8 = 0;
+const CLS_BORDER: u8 = 1;
+const CLS_TEXT: u8 = 2;
+const CLS_EDGE: u8 = 3;
+const CLS_EDGE_LABEL: u8 = 4;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Cls {
     Border,
     Text,
     Edge,
+    EdgeLabel,
+}
+
+impl Cls {
+    fn to_u8(self) -> u8 {
+        match self {
+            Cls::Border => CLS_BORDER,
+            Cls::Text => CLS_TEXT,
+            Cls::Edge => CLS_EDGE,
+            Cls::EdgeLabel => CLS_EDGE_LABEL,
+        }
+    }
 }
 
 pub struct Canvas {
@@ -31,10 +50,11 @@ pub struct Canvas {
     pub cells: Vec<char>,
     pub occupied: Vec<bool>,
     lines: Vec<u8>,
+    cls: Vec<u8>,
 }
 
 impl Canvas {
-    pub fn new(w: usize, h: usize) -> Self {
+    pub    fn new(w: usize, h: usize) -> Self {
         if w == 0 || h == 0 || w * h > MAX_CANVAS_CELLS {
             return Self {
                 w: 1,
@@ -42,6 +62,7 @@ impl Canvas {
                 cells: vec![' '],
                 occupied: vec![false],
                 lines: vec![0],
+                cls: vec![0],
             };
         }
         Self {
@@ -50,6 +71,7 @@ impl Canvas {
             cells: vec![' '; w * h],
             occupied: vec![false; w * h],
             lines: vec![0; w * h],
+            cls: vec![0; w * h],
         }
     }
 
@@ -57,11 +79,12 @@ impl Canvas {
         y * self.w + x
     }
 
-    fn set(&mut self, x: usize, y: usize, c: char, _cls: Cls) {
+    fn set(&mut self, x: usize, y: usize, c: char, cls: Cls) {
         if x < self.w && y < self.h {
             let i = self.idx(x, y);
             self.cells[i] = c;
             self.occupied[i] = true;
+            self.cls[i] = cls.to_u8();
         }
     }
 
@@ -69,6 +92,10 @@ impl Canvas {
         if x < self.w && y < self.h {
             let i = self.idx(x, y);
             self.lines[i] |= bits;
+            // Lines from add_bits default to Edge classification
+            if self.cls[i] == CLS_NONE {
+                self.cls[i] = CLS_EDGE;
+            }
         }
     }
 
@@ -97,6 +124,7 @@ impl Canvas {
         let mut new_cells = vec![' '; self.w * self.h];
         let mut new_occ = vec![false; self.w * self.h];
         let mut new_lines = vec![0u8; self.w * self.h];
+        let mut new_cls = vec![0u8; self.w * self.h];
         for y in 0..self.h {
             let ny = self.h - 1 - y;
             for x in 0..self.w {
@@ -105,6 +133,7 @@ impl Canvas {
                 new_cells[ni] = self.cells[i];
                 new_occ[ni] = self.occupied[i];
                 new_lines[ni] = self.lines[i];
+                new_cls[ni] = self.cls[i];
             }
         }
         // Mirror the vertical bit: U<->D
@@ -115,6 +144,7 @@ impl Canvas {
         self.cells = new_cells;
         self.occupied = new_occ;
         self.lines = new_lines;
+        self.cls = new_cls;
     }
 
     fn flip_horizontal(&mut self) {
@@ -125,6 +155,7 @@ impl Canvas {
                 self.cells.swap(l, r);
                 self.occupied.swap(l, r);
                 self.lines.swap(l, r);
+                self.cls.swap(l, r);
             }
         }
         // Mirror horizontal bit: L<->R
@@ -134,10 +165,20 @@ impl Canvas {
         }
     }
 
-    fn to_lines(&self, _border_c: char, _text_c: char, _edge_c: char) -> Vec<String> {
+    fn to_lines(&self, _border_c: char, _text_c: char, _edge_c: char,
+                color_mode: crate::theme::ColorMode,
+                theme: &crate::theme::Theme) -> Vec<String> {
+        use crate::theme::ColorMode;
+        let color_on = color_mode != ColorMode::None;
+        let node_fg = theme.node_fg.as_ref().map(|c| c.fg(color_mode));
+        let edge_fg = theme.edge.as_ref().map(|c| c.fg(color_mode));
+        let edge_label_fg = theme.edge_label.as_ref().map(|c| c.fg(color_mode));
+        let start_end_fg = theme.start_end.as_ref().map(|c| c.fg(color_mode));
+
         let mut out: Vec<String> = Vec::with_capacity(self.h);
+        let mut prev_color: Option<u8> = None; // cls of previous cell
         for y in 0..self.h {
-            let mut line = String::with_capacity(self.w);
+            let mut line = String::with_capacity(self.w * 2);
             let mut x = 0;
             while x < self.w {
                 let i = self.idx(x, y);
@@ -155,6 +196,52 @@ impl Canvas {
                 } else {
                     ' '
                 };
+
+                if color_on && ch != ' ' {
+                    let cur_cls = self.cls[i];
+                    let color_escape = if cur_cls == CLS_TEXT || cur_cls == CLS_BORDER {
+                        // Node text and borders
+                        if let Some(ref escape) = node_fg {
+                            Some(escape.as_str())
+                        } else {
+                            None
+                        }
+                    } else if cur_cls == CLS_EDGE_LABEL {
+                        if let Some(ref escape) = edge_label_fg {
+                            Some(escape.as_str())
+                        } else if let Some(ref escape) = edge_fg {
+                            Some(escape.as_str())
+                        } else {
+                            None
+                        }
+                    } else if cur_cls == CLS_EDGE {
+                        if let Some(ref escape) = edge_fg {
+                            Some(escape.as_str())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    // Emit ANSI escape if color changed
+                    let needs_escape = match (prev_color, color_escape) {
+                        (Some(prev), Some(cur)) => color_class_key(prev) != color_class_key(cur_cls),
+                        (None, Some(_)) => true,
+                        (Some(_), None) => true,
+                        (None, None) => false,
+                    };
+
+                    if needs_escape {
+                        if let Some(escape) = color_escape {
+                            line.push_str(escape);
+                        } else {
+                            line.push_str(crate::theme::RESET);
+                        }
+                    }
+                    prev_color = Some(cur_cls);
+                }
+
                 line.push(ch);
                 x += 1;
             }
@@ -165,6 +252,16 @@ impl Canvas {
             out.pop();
         }
         out
+    }
+}
+
+/// Map cls to a simplified color class key for run-length encoding.
+fn color_class_key(cls: u8) -> u8 {
+    match cls {
+        CLS_TEXT | CLS_BORDER => 1,
+        CLS_EDGE => 2,
+        CLS_EDGE_LABEL => 3,
+        _ => 0,
     }
 }
 
@@ -494,6 +591,7 @@ pub fn draw_box(canvas: &mut Canvas, p: &Placed, lines: &[String], shape: Shape,
         for cx in x..=right {
             let i = canvas.idx(cx, cy);
             canvas.occupied[i] = true;
+            canvas.cls[i] = CLS_BORDER;
         }
     }
 
@@ -588,7 +686,7 @@ fn place_label(canvas: &mut Canvas, label: &str, row: usize, start_x: usize) {
         if x + char_width(c).max(1) > canvas.w {
             break;
         }
-        canvas.set(x, row, c, Cls::Edge);
+        canvas.set(x, row, c, Cls::EdgeLabel);
         x += char_width(c).max(1);
     }
 }
@@ -596,7 +694,7 @@ fn place_label(canvas: &mut Canvas, label: &str, row: usize, start_x: usize) {
 // ─── Public API ──────────────────────────────────────────────
 
 /// Layout and render a flowchart/graph.
-pub fn layout_flowchart(graph: &Graph, ascii_only: bool) -> String {
+pub fn layout_flowchart(graph: &Graph, ascii_only: bool, color_mode: crate::theme::ColorMode, theme: &crate::theme::Theme) -> String {
     if graph.nodes.is_empty() {
         return String::new();
     }
@@ -680,7 +778,7 @@ pub fn layout_flowchart(graph: &Graph, ascii_only: bool) -> String {
     }
 
     // Convert to string
-    let lines = canvas.to_lines('│', ' ', '─');
+    let lines = canvas.to_lines('│', ' ', '─', color_mode, theme);
     match graph.dir {
         Dir::Up => {
             // Reverse lines
@@ -797,7 +895,7 @@ fn canvas_wrap(label: &str, max_width: usize, max_lines: usize) -> Vec<String> {
 // ─── Class/ER Diagram Layout ─────────────────────────────────
 
 /// Render a class or ER diagram with member/attribute boxes.
-pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool, ascii_only: bool) -> String {
+pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool, ascii_only: bool, color_mode: crate::theme::ColorMode, theme: &crate::theme::Theme) -> String {
     let n = graph.nodes.len();
     if n == 0 {
         return String::new();
@@ -954,7 +1052,7 @@ pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool, asc
     }
 
     if canvas_w.saturating_mul(canvas_h) > MAX_CANVAS_CELLS {
-        return layout_flowchart(graph, ascii_only);
+        return layout_flowchart(graph, ascii_only, color_mode, theme);
     }
 
     let mut canvas = Canvas::new(canvas_w, canvas_h);
@@ -988,10 +1086,16 @@ pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool, asc
         }
     }
 
-    canvas_to_string(&canvas)
+    canvas_to_string(&canvas, color_mode, theme)
 }
 
-fn canvas_to_string(canvas: &Canvas) -> String {
+fn canvas_to_string(canvas: &Canvas, color_mode: crate::theme::ColorMode, theme: &crate::theme::Theme) -> String {
+    let color_on = color_mode != crate::theme::ColorMode::None;
+    let node_fg = theme.node_fg.as_ref().map(|c| c.fg(color_mode)).unwrap_or_default();
+    let edge_fg = theme.edge.as_ref().map(|c| c.fg(color_mode)).unwrap_or_default();
+    let edge_label_fg = theme.edge_label.as_ref().map(|c| c.fg(color_mode)).unwrap_or_default();
+    let reset = crate::theme::RESET;
+
     let mut out = String::new();
     let mut last_nonempty = 0;
     for row in (0..canvas.h).rev() {
@@ -1002,20 +1106,53 @@ fn canvas_to_string(canvas: &Canvas) -> String {
             break;
         }
     }
+    let mut prev_cls: u8 = CLS_NONE;
     for row in 0..=last_nonempty {
         let start = row * canvas.w;
         let end = start + canvas.w;
-        let line: String = canvas.cells[start..end].iter().collect();
-        let trimmed = line.trim_end().to_string();
-        if !trimmed.is_empty() || row <= last_nonempty {
-            out.push_str(&trimmed);
-            out.push('\n');
+
+        if color_on {
+            let mut line = String::with_capacity(canvas.w * 2);
+            for i in start..end {
+                let ch = canvas.cells[i];
+                let cur_cls = canvas.cls[i];
+                if ch != ' ' && cur_cls != prev_cls {
+                    match cur_cls {
+                        CLS_TEXT | CLS_BORDER => {
+                            if !node_fg.is_empty() { line.push_str(&node_fg); }
+                        }
+                        CLS_EDGE => {
+                            if !edge_fg.is_empty() { line.push_str(&edge_fg); }
+                        }
+                        CLS_EDGE_LABEL => {
+                            if !edge_label_fg.is_empty() { line.push_str(&edge_label_fg); }
+                        }
+                        _ => {
+                            if prev_cls != CLS_NONE { line.push_str(reset); }
+                        }
+                    }
+                    prev_cls = cur_cls;
+                }
+                line.push(ch);
+            }
+            let trimmed = line.trim_end().to_string();
+            if !trimmed.is_empty() || row < last_nonempty {
+                out.push_str(&trimmed);
+                out.push('\n');
+            }
+        } else {
+            let line: String = canvas.cells[start..end].iter().collect();
+            let trimmed = line.trim_end().to_string();
+            if !trimmed.is_empty() || row < last_nonempty {
+                out.push_str(&trimmed);
+                out.push('\n');
+            }
         }
     }
     out
 }
 
-/// Draw a UML-style class box with section separators (├──┤).
+/// Draw a UML-style class box
 pub fn draw_class_box(canvas: &mut Canvas, p: &Placed, sections: &[Vec<String>], shape: Shape, ascii_only: bool) {
     let (x, y, w, h) = (p.x, p.y, p.w, p.h);
     if w < 2 || h < 2 {
@@ -1090,11 +1227,12 @@ pub fn draw_class_box(canvas: &mut Canvas, p: &Placed, sections: &[Vec<String>],
         canvas.add_bits(right, cy, U | D);
     }
 
-    // Mark all cells as occupied
+    // Mark all cells as occupied with Border classification
     for cy in y..=bottom {
         for cx in x..=right {
             let i = canvas.idx(cx, cy);
             canvas.occupied[i] = true;
+            canvas.cls[i] = CLS_BORDER;
         }
     }
 }

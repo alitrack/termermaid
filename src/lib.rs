@@ -7,6 +7,7 @@ pub mod mermaid;
 pub mod parse;
 pub mod pie;
 pub mod sequence;
+pub mod theme;
 
 #[cfg(feature = "python")]
 mod py_bindings {

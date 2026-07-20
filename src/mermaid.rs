@@ -2,14 +2,19 @@ use crate::layout::layout_flowchart;
 use crate::parse::{parse_class, parse_er, parse_graph, parse_state, ClassInfo};
 use crate::pie::{layout_pie, parse_pie};
 use crate::sequence::{layout_sequence, parse_sequence};
+use crate::theme::{ColorMode, Theme, ThemeType};
 
 /// Render options.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RenderOptions {
     /// Use ASCII box-drawing characters instead of Unicode.
     pub ascii_only: bool,
     /// Output format: false = text, true = JSON.
     pub format_json: bool,
+    /// Color mode for ANSI output.
+    pub color_mode: ColorMode,
+    /// Theme for colored output.
+    pub theme: Theme,
 }
 
 impl Default for RenderOptions {
@@ -17,6 +22,8 @@ impl Default for RenderOptions {
         Self {
             ascii_only: false,
             format_json: false,
+            color_mode: ColorMode::None,
+            theme: Theme::get(ThemeType::Default),
         }
     }
 }
@@ -33,24 +40,31 @@ pub fn render_with_opts(src: &str, opts: RenderOptions) -> Option<String> {
         return None;
     }
 
+    let color_mode = if opts.format_json {
+        ColorMode::None // JSON output must stay clean
+    } else {
+        opts.color_mode
+    };
+    let theme = &opts.theme;
+
     // Try each parser in order — first match wins.
     let result = if let Some(graph) = parse_graph(src) {
-        Some((layout_flowchart(&graph, opts.ascii_only), None))
+        Some((layout_flowchart(&graph, opts.ascii_only, color_mode, theme), None))
     } else if let Some(seq) = parse_sequence(src) {
-        Some((layout_sequence(&seq, opts.ascii_only), None))
+        Some((layout_sequence(&seq, opts.ascii_only, color_mode, theme), None))
     } else if let Some(graph) = parse_state(src) {
-        Some((layout_flowchart(&graph, opts.ascii_only), None))
+        Some((layout_flowchart(&graph, opts.ascii_only, color_mode, theme), None))
     } else if let Some((graph, infos)) = parse_class(src) {
-        Some((layout_class(&graph, &infos, false, opts.ascii_only), Some("class")))
+        Some((layout_class(&graph, &infos, false, opts.ascii_only, color_mode, theme), Some("class")))
     } else if let Some((graph, infos)) = parse_er(src) {
-        Some((layout_class(&graph, &infos, true, opts.ascii_only), Some("er")))
+        Some((layout_class(&graph, &infos, true, opts.ascii_only, color_mode, theme), Some("er")))
     } else if let Some(pie) = parse_pie(src) {
-        Some((layout_pie(&pie, opts.ascii_only), Some("pie")))
+        Some((layout_pie(&pie, opts.ascii_only, color_mode, theme), Some("pie")))
     } else {
         if opts.format_json {
             return Some(r#"{"error":"unsupported diagram type","fallback":true}"#.to_string());
         }
-        return Some(fallback(src));
+        return Some(fallback(src, opts.ascii_only));
     };
 
     if let Some((output, diag_type)) = result {
@@ -77,30 +91,36 @@ fn format_json(output: String, diag_type: Option<&str>) -> String {
 }
 
 /// Render a class/ER diagram with member boxes.
-fn layout_class(graph: &crate::graph::Graph, infos: &[ClassInfo], is_er: bool, ascii_only: bool) -> String {
+fn layout_class(graph: &crate::graph::Graph, infos: &[ClassInfo], is_er: bool,
+                ascii_only: bool, color_mode: ColorMode, theme: &Theme) -> String {
     let has_members = infos
         .iter()
         .any(|ci| !ci.members.is_empty() || !ci.methods.is_empty());
 
     if has_members {
-        crate::layout::layout_class_diagram(graph, infos, is_er, ascii_only)
+        crate::layout::layout_class_diagram(graph, infos, is_er, ascii_only, color_mode, theme)
     } else {
-        crate::layout::layout_flowchart(graph, ascii_only)
+        crate::layout::layout_flowchart(graph, ascii_only, color_mode, theme)
     }
 }
 
-fn fallback(src: &str) -> String {
+fn fallback(src: &str, ascii_only: bool) -> String {
     let width = src.lines().map(|l| l.len()).max().unwrap_or(10).min(80) + 4;
-    let top = format!("┌{}┐", "─".repeat(width - 2));
-    let bottom = format!("└{}┘", "─".repeat(width - 2));
-    let mut out = format!("{}\n", top);
+    let (tl, tr, bl, br, hz, vt) = if ascii_only {
+        ('+', '+', '+', '+', '-', '|')
+    } else {
+        ('┌', '┐', '└', '┘', '─', '│')
+    };
+    let top = format!("{tl}{}{tr}", hz.to_string().repeat(width - 2));
+    let bottom = format!("{bl}{}{br}", hz.to_string().repeat(width - 2));
+    let mut out = format!("{top}\n");
     for line in src.lines().take(20) {
         let line = if line.len() > width - 4 {
             format!("{}…", &line[..width - 5])
         } else {
             line.to_string()
         };
-        out.push_str(&format!("│ {:<width$} │\n", line, width = width - 4));
+        out.push_str(&format!("{vt} {:<width$} {vt}\n", line, width = width - 4));
     }
     out.push_str(&bottom);
     out
@@ -180,5 +200,24 @@ mod tests {
         let out = result.unwrap();
         assert!(out.contains("\"text\""));
         assert!(out.contains("\"diagram_type\""));
+    }
+
+    #[test]
+    fn test_color_mode_none_is_default() {
+        let opts = RenderOptions::default();
+        assert_eq!(opts.color_mode as usize, ColorMode::None as usize);
+    }
+
+    #[test]
+    fn test_color_mode_in_json_forced_none() {
+        let opts = RenderOptions {
+            format_json: true,
+            color_mode: ColorMode::Ansi256,
+            ..Default::default()
+        };
+        let result = render_with_opts("graph TD\n  A-->B", opts);
+        let out = result.unwrap();
+        // JSON should NOT contain ANSI escape sequences
+        assert!(!out.contains('\x1b'));
     }
 }

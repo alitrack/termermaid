@@ -395,7 +395,7 @@ fn draw_sequence_box(canvas: &mut Canvas, p: &Placed, label: &str, _shape: Shape
     }
 }
 
-pub fn layout_sequence(seq: &Sequence, ascii_only: bool) -> String {
+pub fn layout_sequence(seq: &Sequence, ascii_only: bool, color_mode: crate::theme::ColorMode, theme: &crate::theme::Theme) -> String {
     let n = seq.labels.len();
     if n == 0 {
         return String::new();
@@ -657,7 +657,14 @@ pub fn layout_sequence(seq: &Sequence, ascii_only: bool) -> String {
         }
     }
 
-    canvas_to_string(&canvas)
+    let result = canvas_to_string(&canvas);
+
+    if color_mode != crate::theme::ColorMode::None {
+        if let Some(node_fg) = theme.node_fg.as_ref().map(|c| c.fg(color_mode)) {
+            return format!("{}{}{}", node_fg, result, crate::theme::RESET);
+        }
+    }
+    result
 }
 
 fn fallback_seq(seq: &Sequence) -> String {
@@ -724,13 +731,13 @@ mod tests {
 
     #[test]
     fn test_render_empty() {
-        assert_eq!(layout_sequence(&Sequence { labels: vec![], index: HashMap::new(), items: vec![] }, false), "");
+        assert_eq!(layout_sequence(&Sequence { labels: vec![], index: HashMap::new(), items: vec![] }, false, crate::theme::ColorMode::None, &crate::theme::Theme::get(Default::default())), "");
     }
 
     #[test]
     fn test_render_simple() {
         let seq = parse_sequence("sequenceDiagram\n  A->>B: hello").unwrap();
-        let out = layout_sequence(&seq, false);
+        let out = layout_sequence(&seq, false, crate::theme::ColorMode::None, &crate::theme::Theme::get(Default::default()));
         assert!(!out.is_empty());
         assert!(out.contains("A"));
         assert!(out.contains("B"));

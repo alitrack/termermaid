@@ -67,12 +67,17 @@ pub fn parse_pie(src: &str) -> Option<PieChart> {
 }
 
 /// Render a pie chart as a horizontal bar chart.
-pub fn layout_pie(chart: &PieChart, ascii_only: bool) -> String {
+pub fn layout_pie(chart: &PieChart, ascii_only: bool, color_mode: crate::theme::ColorMode, theme: &crate::theme::Theme) -> String {
     let bar_char = if ascii_only { '#' } else { '█' };
     let total: f64 = chart.slices.iter().map(|s| s.value).sum();
     if total <= 0.0 {
         return String::new();
     }
+
+    let use_color = color_mode != crate::theme::ColorMode::None;
+    let color_on = use_color && theme.node_fg.is_some();
+    let node_fg = theme.node_fg.as_ref().map(|c| c.fg(color_mode)).unwrap_or_default();
+    let reset = if use_color { crate::theme::RESET } else { "" };
 
     let max_label_w = chart.slices.iter()
         .map(|s| s.label.chars().map(char_width).sum::<usize>())
@@ -123,7 +128,11 @@ pub fn layout_pie(chart: &PieChart, ascii_only: bool) -> String {
         out.push('\n');
     }
 
-    out
+    if color_on {
+        format!("{}{}{}", node_fg, out, reset)
+    } else {
+        out
+    }
 }
 
 #[cfg(test)]
@@ -153,7 +162,7 @@ mod tests {
     #[test]
     fn test_render() {
         let chart = parse_pie("pie title Pets\n  \"Dogs\": 386\n  \"Cats\": 85").unwrap();
-        let out = layout_pie(&chart, false);
+        let out = layout_pie(&chart, false, crate::theme::ColorMode::None, &crate::theme::Theme::get(Default::default()));
         assert!(out.contains("Pets"));
         assert!(out.contains("Dogs"));
         assert!(out.contains("Cats"));
@@ -162,7 +171,7 @@ mod tests {
     #[test]
     fn test_render_ascii() {
         let chart = parse_pie("pie\n  \"A\": 10").unwrap();
-        let out = layout_pie(&chart, true);
+        let out = layout_pie(&chart, true, crate::theme::ColorMode::None, &crate::theme::Theme::get(Default::default()));
         assert!(out.contains('#'));
     }
 }
