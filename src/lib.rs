@@ -5,6 +5,7 @@ pub mod graph;
 pub mod layout;
 pub mod mermaid;
 pub mod parse;
+pub mod pie;
 pub mod sequence;
 
 #[cfg(feature = "python")]

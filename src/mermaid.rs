@@ -1,5 +1,6 @@
 use crate::layout::layout_flowchart;
 use crate::parse::{parse_class, parse_er, parse_graph, parse_state, ClassInfo};
+use crate::pie::{layout_pie, parse_pie};
 use crate::sequence::{layout_sequence, parse_sequence};
 
 /// Render options.
@@ -43,6 +44,8 @@ pub fn render_with_opts(src: &str, opts: RenderOptions) -> Option<String> {
         Some((layout_class(&graph, &infos, false, opts.ascii_only), Some("class")))
     } else if let Some((graph, infos)) = parse_er(src) {
         Some((layout_class(&graph, &infos, true, opts.ascii_only), Some("er")))
+    } else if let Some(pie) = parse_pie(src) {
+        Some((layout_pie(&pie, opts.ascii_only), Some("pie")))
     } else {
         if opts.format_json {
             return Some(r#"{"error":"unsupported diagram type","fallback":true}"#.to_string());

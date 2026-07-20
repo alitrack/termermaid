@@ -1,6 +1,6 @@
 [package]
 name = "termermaid"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Terminal Mermaid diagram renderer — Unicode box-drawing art from Mermaid syntax. 5 diagram types, pure Rust."
 license = "Apache-2.0"
