@@ -2,9 +2,11 @@
 name = "termermaid"
 version = "0.1.0"
 edition = "2021"
-description = "Terminal Mermaid diagram renderer — Unicode box-drawing art from Mermaid syntax"
+description = "Terminal Mermaid diagram renderer — Unicode box-drawing art from Mermaid syntax. 5 diagram types, pure Rust."
 license = "Apache-2.0"
 repository = "https://github.com/alitrack/termermaid"
+readme = "README.md"
+documentation = "https://github.com/alitrack/termermaid"
 keywords = ["mermaid", "terminal", "diagram", "unicode", "cli"]
 categories = ["command-line-utilities", "visualization"]
 
