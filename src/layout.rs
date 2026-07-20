@@ -460,7 +460,7 @@ fn assign_tracks(spans: &[(usize, usize, usize)], n_edges: usize) -> (Vec<(usize
 
 // ─── Drawing ─────────────────────────────────────────────────
 
-pub fn draw_box(canvas: &mut Canvas, p: &Placed, lines: &[String], shape: Shape) {
+pub fn draw_box(canvas: &mut Canvas, p: &Placed, lines: &[String], shape: Shape, ascii_only: bool) {
     let (x, y, w, h) = (p.x, p.y, p.w, p.h);
     if w < 2 || h < 2 {
         return;
@@ -468,9 +468,13 @@ pub fn draw_box(canvas: &mut Canvas, p: &Placed, lines: &[String], shape: Shape)
     let right = x + w - 1;
     let bottom = y + h - 1;
 
-    let (tl, tr, bl, br) = match shape {
-        Shape::Round | Shape::Diamond => ('╭', '╮', '╰', '╯'),
-        Shape::Rect => ('┌', '┐', '└', '┘'),
+    let (tl, tr, bl, br) = if ascii_only {
+        ('+', '+', '+', '+')
+    } else {
+        match shape {
+            Shape::Round | Shape::Diamond => ('╭', '╮', '╰', '╯'),
+            Shape::Rect => ('┌', '┐', '└', '┘'),
+        }
     };
     canvas.set(x, y, tl, Cls::Border);
     canvas.set(right, y, tr, Cls::Border);
@@ -592,7 +596,7 @@ fn place_label(canvas: &mut Canvas, label: &str, row: usize, start_x: usize) {
 // ─── Public API ──────────────────────────────────────────────
 
 /// Layout and render a flowchart/graph.
-pub fn layout_flowchart(graph: &Graph) -> String {
+pub fn layout_flowchart(graph: &Graph, ascii_only: bool) -> String {
     if graph.nodes.is_empty() {
         return String::new();
     }
@@ -672,7 +676,7 @@ pub fn layout_flowchart(graph: &Graph) -> String {
 
     // Draw nodes
     for i in 0..n {
-        draw_box(&mut canvas, &placed[i], &wrapped[i], graph.nodes[i].shape);
+        draw_box(&mut canvas, &placed[i], &wrapped[i], graph.nodes[i].shape, ascii_only);
     }
 
     // Convert to string
@@ -793,7 +797,7 @@ fn canvas_wrap(label: &str, max_width: usize, max_lines: usize) -> Vec<String> {
 // ─── Class/ER Diagram Layout ─────────────────────────────────
 
 /// Render a class or ER diagram with member/attribute boxes.
-pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool) -> String {
+pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool, ascii_only: bool) -> String {
     let n = graph.nodes.len();
     if n == 0 {
         return String::new();
@@ -950,7 +954,7 @@ pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool) -> 
     }
 
     if canvas_w.saturating_mul(canvas_h) > MAX_CANVAS_CELLS {
-        return layout_flowchart(graph);
+        return layout_flowchart(graph, ascii_only);
     }
 
     let mut canvas = Canvas::new(canvas_w, canvas_h);
@@ -958,7 +962,7 @@ pub fn layout_class_diagram(graph: &Graph, infos: &[ClassInfo], is_er: bool) -> 
     // Draw class boxes
     for i in 0..n {
         let shape = &graph.nodes[i].shape;
-        draw_class_box(&mut canvas, &placed[i], &node_sections[i], *shape);
+        draw_class_box(&mut canvas, &placed[i], &node_sections[i], *shape, ascii_only);
     }
 
     // Edge routing — spans are (edge_index, from_rank, to_rank)
@@ -1012,12 +1016,7 @@ fn canvas_to_string(canvas: &Canvas) -> String {
 }
 
 /// Draw a UML-style class box with section separators (├──┤).
-pub fn draw_class_box(
-    canvas: &mut Canvas,
-    p: &Placed,
-    sections: &[Vec<String>],
-    shape: Shape,
-) {
+pub fn draw_class_box(canvas: &mut Canvas, p: &Placed, sections: &[Vec<String>], shape: Shape, ascii_only: bool) {
     let (x, y, w, h) = (p.x, p.y, p.w, p.h);
     if w < 2 || h < 2 {
         return;
@@ -1026,9 +1025,13 @@ pub fn draw_class_box(
     let bottom = y + h - 1;
 
     // Border corners
-    let (tl, tr, bl, br, hz, vt) = match shape {
-        Shape::Round | Shape::Diamond => ('╭', '╮', '╰', '╯', '─', '│'),
-        Shape::Rect => ('┌', '┐', '└', '┘', '─', '│'),
+    let (tl, tr, bl, br, _hz, _vt) = if ascii_only {
+        ('+', '+', '+', '+', '-', '|')
+    } else {
+        match shape {
+            Shape::Round | Shape::Diamond => ('╭', '╮', '╰', '╯', '─', '│'),
+            Shape::Rect => ('┌', '┐', '└', '┘', '─', '│'),
+        }
     };
     canvas.set(x, y, tl, Cls::Border);
     canvas.set(right, y, tr, Cls::Border);
@@ -1051,11 +1054,11 @@ pub fn draw_class_box(
         // Section separator (except before first section)
         if si > 0 {
             if row <= bottom {
-                canvas.set(x, row, '├', Cls::Border);
+                canvas.set(x, row, if ascii_only { '+' } else { '├' }, Cls::Border);
                 for cx in (x + 1)..right {
                     canvas.add_bits(cx, row, L | R);
                 }
-                canvas.set(right, row, '┤', Cls::Border);
+                canvas.set(right, row, if ascii_only { '+' } else { '┤' }, Cls::Border);
             }
             row += 1;
         }
@@ -1095,6 +1098,3 @@ pub fn draw_class_box(
         }
     }
 }
-
-// Re-export for sequence.rs
-pub use crate::canvas::fit_label;

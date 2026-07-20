@@ -321,9 +321,13 @@ fn note_geometry(xs: &[usize], anchor: &NoteAnchor, text_w: usize) -> (usize, us
     }
 }
 
-fn draw_sequence_box(canvas: &mut Canvas, p: &Placed, label: &str, _shape: Shape) {
+fn draw_sequence_box(canvas: &mut Canvas, p: &Placed, label: &str, _shape: Shape, ascii_only: bool) {
     // Simple rect box
-    let box_chars = ['┌', '┐', '└', '┘', '─', '│'];
+    let (tl, tr, bl, br, hz, vt) = if ascii_only {
+        ('+', '+', '+', '+', '-', '|')
+    } else {
+        ('┌', '┐', '└', '┘', '─', '│')
+    };
     let x = p.x;
     let y = p.y;
     let w = p.w;
@@ -331,17 +335,17 @@ fn draw_sequence_box(canvas: &mut Canvas, p: &Placed, label: &str, _shape: Shape
 
     // Top
     if y < canvas.h && x < canvas.w {
-        canvas.cells[y * canvas.w + x] = box_chars[0]; // ┌
+        canvas.cells[y * canvas.w + x] = tl;
         canvas.occupied[y * canvas.w + x] = true;
     }
     for i in 1..w.saturating_sub(1) {
         if y < canvas.h && x + i < canvas.w {
-            canvas.cells[y * canvas.w + x + i] = box_chars[4]; // ─
+            canvas.cells[y * canvas.w + x + i] = hz;
             canvas.occupied[y * canvas.w + x + i] = true;
         }
     }
     if y < canvas.h && x + w.saturating_sub(1) < canvas.w {
-        canvas.cells[y * canvas.w + x + w.saturating_sub(1)] = box_chars[1]; // ┐
+        canvas.cells[y * canvas.w + x + w.saturating_sub(1)] = tr;
         canvas.occupied[y * canvas.w + x + w.saturating_sub(1)] = true;
     }
 
@@ -349,11 +353,11 @@ fn draw_sequence_box(canvas: &mut Canvas, p: &Placed, label: &str, _shape: Shape
     for row in 1..h.saturating_sub(1) {
         if y + row < canvas.h {
             if x < canvas.w {
-                canvas.cells[(y + row) * canvas.w + x] = box_chars[5]; // │
+                canvas.cells[(y + row) * canvas.w + x] = vt;
                 canvas.occupied[(y + row) * canvas.w + x] = true;
             }
             if x + w.saturating_sub(1) < canvas.w {
-                canvas.cells[(y + row) * canvas.w + x + w.saturating_sub(1)] = box_chars[5];
+                canvas.cells[(y + row) * canvas.w + x + w.saturating_sub(1)] = vt;
                 canvas.occupied[(y + row) * canvas.w + x + w.saturating_sub(1)] = true;
             }
         }
@@ -362,17 +366,17 @@ fn draw_sequence_box(canvas: &mut Canvas, p: &Placed, label: &str, _shape: Shape
     // Bottom
     if y + h.saturating_sub(1) < canvas.h {
         if x < canvas.w {
-            canvas.cells[(y + h.saturating_sub(1)) * canvas.w + x] = box_chars[2]; // └
+            canvas.cells[(y + h.saturating_sub(1)) * canvas.w + x] = bl;
             canvas.occupied[(y + h.saturating_sub(1)) * canvas.w + x] = true;
         }
         for i in 1..w.saturating_sub(1) {
             if x + i < canvas.w {
-                canvas.cells[(y + h.saturating_sub(1)) * canvas.w + x + i] = box_chars[4];
+                canvas.cells[(y + h.saturating_sub(1)) * canvas.w + x + i] = hz;
                 canvas.occupied[(y + h.saturating_sub(1)) * canvas.w + x + i] = true;
             }
         }
         if x + w.saturating_sub(1) < canvas.w {
-            canvas.cells[(y + h.saturating_sub(1)) * canvas.w + x + w.saturating_sub(1)] = box_chars[3]; // ┘
+            canvas.cells[(y + h.saturating_sub(1)) * canvas.w + x + w.saturating_sub(1)] = br;
             canvas.occupied[(y + h.saturating_sub(1)) * canvas.w + x + w.saturating_sub(1)] = true;
         }
     }
@@ -391,7 +395,7 @@ fn draw_sequence_box(canvas: &mut Canvas, p: &Placed, label: &str, _shape: Shape
     }
 }
 
-pub fn layout_sequence(seq: &Sequence) -> String {
+pub fn layout_sequence(seq: &Sequence, ascii_only: bool) -> String {
     let n = seq.labels.len();
     if n == 0 {
         return String::new();
@@ -516,17 +520,18 @@ pub fn layout_sequence(seq: &Sequence) -> String {
                 cy: by + box_h[i] / 2,
                 rank: 0,
             };
-            draw_sequence_box(&mut canvas, &p, &labels[i], Shape::Rect);
+            draw_sequence_box(&mut canvas, &p, &labels[i], Shape::Rect, ascii_only);
         }
     }
 
     // Draw lifelines
+    let vbar = if ascii_only { '|' } else { '│' };
     for i in 0..n {
         let lx = xs[i];
         for row in max_box_h..bottom_top {
             if row < canvas_h && lx < canvas.w {
                 if canvas.cells[row * canvas.w + lx] == ' ' {
-                    canvas.cells[row * canvas.w + lx] = '│';
+                    canvas.cells[row * canvas.w + lx] = vbar;
                 }
             }
         }
@@ -543,23 +548,22 @@ pub fn layout_sequence(seq: &Sequence) -> String {
                 let is_left_to_right = from < to;
 
                 // Horizontal line
-                let line_char = if *dashed { '┄' } else { '─' };
+                let line_char = if *dashed { if ascii_only { '.' } else { '┄' } } else { if ascii_only { '-' } else { '─' } };
                 for x in x0..=x1 {
                     if r < canvas.h && x < canvas.w {
                         let current = canvas.cells[r * canvas.w + x];
-                        if current == ' ' || current == '│' {
+                        if current == ' ' || current == '│' || current == '|' {
                             canvas.cells[r * canvas.w + x] = line_char;
-                        } else if current == '─' || current == '┄' {
-                            // crossing, use ┼
-                            canvas.cells[r * canvas.w + x] = '┼';
+                        } else if current == '─' || current == '┄' || current == '-' || current == '.' {
+                            canvas.cells[r * canvas.w + x] = if ascii_only { '+' } else { '┼' };
                         }
                     }
                 }
 
                 // Arrow heads
                 let arrow = match head {
-                    SeqHead::Arrow => if is_left_to_right { '▶' } else { '◀' },
-                    SeqHead::Cross => '╳',
+                    SeqHead::Arrow => if is_left_to_right { if ascii_only { '>' } else { '▶' } } else { if ascii_only { '<' } else { '◀' } },
+                    SeqHead::Cross => if ascii_only { 'X' } else { '╳' },
                 };
                 if is_left_to_right {
                     if r < canvas.h && x1 < canvas.w {
@@ -596,16 +600,27 @@ pub fn layout_sequence(seq: &Sequence) -> String {
                     for col in 0..nw {
                         if nx + col >= canvas.w { continue; }
                         let ch = if row == 0 {
-                            if col == 0 { '┌' }
-                            else if col == nw - 1 { '┐' }
-                            else { '─' }
+                            if col == 0 {
+                                if ascii_only { '+' } else { '┌' }
+                            } else if col == nw - 1 {
+                                if ascii_only { '+' } else { '┐' }
+                            } else {
+                                if ascii_only { '-' } else { '─' }
+                            }
                         } else if row == nh - 1 {
-                            if col == 0 { '└' }
-                            else if col == nw - 1 { '┘' }
-                            else { '─' }
+                            if col == 0 {
+                                if ascii_only { '+' } else { '└' }
+                            } else if col == nw - 1 {
+                                if ascii_only { '+' } else { '┘' }
+                            } else {
+                                if ascii_only { '-' } else { '─' }
+                            }
                         } else {
-                            if col == 0 || col == nw - 1 { '│' }
-                            else { ' ' }
+                            if col == 0 || col == nw - 1 {
+                                if ascii_only { '|' } else { '│' }
+                            } else {
+                                ' '
+                            }
                         };
                         canvas.cells[(ny + row) * canvas.w + nx + col] = ch;
                     }
@@ -623,9 +638,10 @@ pub fn layout_sequence(seq: &Sequence) -> String {
             SeqItem::Divider { text } => {
                 let dw = text.chars().count() + 4;
                 let dx = 0usize;
+                let div_char = if ascii_only { '-' } else { '─' };
                 for col in 0..dw {
                     if r < canvas.h && dx + col < canvas.w {
-                        canvas.cells[r * canvas.w + dx + col] = '─';
+                        canvas.cells[r * canvas.w + dx + col] = div_char;
                     }
                 }
                 // Text on the divider line
@@ -708,13 +724,13 @@ mod tests {
 
     #[test]
     fn test_render_empty() {
-        assert_eq!(layout_sequence(&Sequence { labels: vec![], index: HashMap::new(), items: vec![] }), "");
+        assert_eq!(layout_sequence(&Sequence { labels: vec![], index: HashMap::new(), items: vec![] }, false), "");
     }
 
     #[test]
     fn test_render_simple() {
         let seq = parse_sequence("sequenceDiagram\n  A->>B: hello").unwrap();
-        let out = layout_sequence(&seq);
+        let out = layout_sequence(&seq, false);
         assert!(!out.is_empty());
         assert!(out.contains("A"));
         assert!(out.contains("B"));
